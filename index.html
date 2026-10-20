@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1f6f4a">
+<title>While Your Out</title>
+<style>
+  :root {
+    --bg: #f4f1ea; --card: #ffffff; --ink: #1d1d1b; --muted: #8a867c;
+    --accent: #1f6f4a; --line: #e4dfd3; --danger: #b3412f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161614; --card: #22221f; --ink: #f1eee6; --muted: #8f8b80;
+            --accent: #4fb586; --line: #33322d; --danger: #e0715e; }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 18px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 560px; margin: 0 auto; padding: 20px 16px 60px; }
+  h1 { font-size: 28px; margin: 8px 0 18px; }
+  form { display: flex; gap: 8px; margin-bottom: 18px; }
+  input[type=text] { flex: 1; min-width: 0; font: inherit; padding: 14px; border-radius: 12px;
+         border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+  button { font: inherit; border: 0; border-radius: 12px; cursor: pointer; }
+  .add { background: var(--accent); color: #fff; padding: 0 20px; font-weight: 600; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; align-items: center; gap: 12px; background: var(--card);
+       border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 8px; }
+  li input[type=checkbox] { width: 26px; height: 26px; accent-color: var(--accent); flex: none; }
+  li .name { flex: 1; word-break: break-word; }
+  li.done .name { text-decoration: line-through; color: var(--muted); }
+  .del { background: none; color: var(--muted); font-size: 22px; padding: 4px 8px; }
+  .empty { color: var(--muted); text-align: center; padding: 30px 0; }
+  .clear { display: block; margin: 16px auto 0; background: none; color: var(--danger); padding: 10px; }
+  .status { color: var(--muted); font-size: 14px; text-align: center; margin-top: 20px; }
+  .cam { display: flex; align-items: center; justify-content: center; width: 52px; flex: none;
+         border: 1px solid var(--line); border-radius: 12px; background: var(--card); cursor: pointer; font-size: 22px; }
+  .cam input { display: none; }
+  .add:disabled { opacity: .6; }
+  .preview { display: flex; align-items: center; gap: 10px; margin: -8px 0 18px; color: var(--muted); font-size: 15px; }
+  .preview img { width: 64px; height: 64px; object-fit: cover; border-radius: 10px; }
+  .thumb { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; flex: none; cursor: zoom-in; }
+  li.done .thumb { opacity: .5; }
+  .viewer { position: fixed; inset: 0; background: rgba(0,0,0,.9); display: flex;
+            align-items: center; justify-content: center; padding: 16px; z-index: 10; }
+  .viewer img { max-width: 100%; max-height: 100%; border-radius: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>While Your Out</h1>
+  <form id="form">
+    <input id="new" type="text" placeholder="Add something (steaks, cigarettes…)" autocomplete="off">
+    <label class="cam" title="Add a photo">📷<input id="photo" type="file" accept="image/*"></label>
+    <button id="addBtn" class="add" type="submit">Add</button>
+  </form>
+  <div id="preview" class="preview" hidden>
+    <img id="previewImg" alt="">
+    <span>Photo attached</span>
+    <button id="unphoto" type="button" class="del" title="Remove photo">×</button>
+  </div>
+  <div id="viewer" class="viewer" hidden><img id="viewerImg" alt=""></div>
+  <ul id="list"></ul>
+  <button id="clear" class="clear" hidden>Remove checked items</button>
+  <div id="status" class="status">Loading…</div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js"></script>
+<script>
+  // Supabase -> Project Settings -> API
+  const SUPABASE_URL = "https://uxogthkeatsmzijpizbk.supabase.co";
+  const SUPABASE_KEY = "sb_publishable_lnQ9tS7fksLYZuTL5hasLw_2kxH4FqG";
+
+  const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  const listEl = document.getElementById("list");
+  const statusEl = document.getElementById("status");
+  const clearBtn = document.getElementById("clear");
+  let items = [];
+
+  function render() {
+    listEl.innerHTML = "";
+    if (!items.length) listEl.innerHTML = '<div class="empty">Nothing needed right now.</div>';
+    for (const it of items) {
+      const li = document.createElement("li");
+      if (it.done) li.className = "done";
+      const cb = document.createElement("input");
+      cb.type = "checkbox"; cb.checked = it.done;
+      cb.onchange = () => setDone(it.id, cb.checked);
+      li.append(cb);
+      if (it.photo_path) {
+        const img = document.createElement("img");
+        img.className = "thumb"; img.src = photoUrl(it.photo_path); img.alt = it.name;
+        img.onclick = () => { viewerImg.src = img.src; viewer.hidden = false; };
+        li.append(img);
+      }
+      const name = document.createElement("span");
+      name.className = "name"; name.textContent = it.name;
+      const del = document.createElement("button");
+      del.className = "del"; del.textContent = "×"; del.title = "Delete";
+      del.onclick = () => remove([it]);
+      li.append(name, del);
+      listEl.append(li);
+    }
+    clearBtn.hidden = !items.some(i => i.done);
+  }
+
+  function showError(error) {
+    statusEl.textContent = "Couldn't reach the list: " + error.message;
+  }
+
+  async function load() {
+    const { data, error } = await db.from("items").select("*")
+      .order("done").order("created_at");
+    if (error) return showError(error);
+    items = data; render();
+    statusEl.textContent = "Updated " + new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+
+  function photoUrl(path) {
+    return db.storage.from("photos").getPublicUrl(path).data.publicUrl;
+  }
+
+  // Phone photos are huge; shrink to 1280px JPEG so uploads are quick on mobile data.
+  async function shrink(file) {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bmp.width * scale);
+    canvas.height = Math.round(bmp.height * scale);
+    canvas.getContext("2d").drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    return new Promise(res => canvas.toBlob(res, "image/jpeg", 0.8));
+  }
+
+  async function add(name, file) {
+    let photo_path = null;
+    if (file) {
+      statusEl.textContent = "Uploading photo…";
+      photo_path = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+      const { error } = await db.storage.from("photos")
+        .upload(photo_path, await shrink(file), { contentType: "image/jpeg" });
+      if (error) return showError(error), false;
+    }
+    const { error } = await db.from("items").insert({ name, photo_path });
+    if (error) return showError(error), false;
+    load();
+    return true;
+  }
+
+  async function setDone(id, done) {
+    const { error } = await db.from("items").update({ done }).eq("id", id);
+    if (error) return showError(error);
+    load();
+  }
+
+  async function remove(list) {
+    const { error } = await db.from("items").delete().in("id", list.map(i => i.id));
+    if (error) return showError(error);
+    const paths = list.map(i => i.photo_path).filter(Boolean);
+    if (paths.length) await db.storage.from("photos").remove(paths);
+    load();
+  }
+
+  clearBtn.onclick = () => remove(items.filter(i => i.done));
+
+  const photoInput = document.getElementById("photo");
+  const preview = document.getElementById("preview");
+  const previewImg = document.getElementById("previewImg");
+  const viewer = document.getElementById("viewer");
+  const viewerImg = document.getElementById("viewerImg");
+  const addBtn = document.getElementById("addBtn");
+  viewer.onclick = () => { viewer.hidden = true; };
+
+  function clearPhoto() {
+    photoInput.value = "";
+    if (previewImg.src) URL.revokeObjectURL(previewImg.src);
+    previewImg.removeAttribute("src");
+    preview.hidden = true;
+  }
+  photoInput.onchange = () => {
+    const file = photoInput.files[0];
+    if (!file) return clearPhoto();
+    previewImg.src = URL.createObjectURL(file);
+    preview.hidden = false;
+  };
+  document.getElementById("unphoto").onclick = clearPhoto;
+
+  document.getElementById("form").onsubmit = async (e) => {
+    e.preventDefault();
+    const input = document.getElementById("new");
+    const file = photoInput.files[0];
+    const name = input.value.trim() || (file ? "Photo" : "");
+    if (!name) return;
+    addBtn.disabled = true;
+    const ok = await add(name, file);
+    addBtn.disabled = false;
+    if (!ok) return;
+    input.value = "";
+    clearPhoto();
+    input.focus();
+  };
+
+  // Live: changes on one phone show up on the other right away.
+  db.channel("items").on("postgres_changes", { event: "*", schema: "public", table: "items" }, load).subscribe();
+  // Phones pause background tabs, so refresh when the app is opened again.
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
+
+  load();
+</script>
+</body>
+</html>
