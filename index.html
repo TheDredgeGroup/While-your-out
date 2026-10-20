@@ -148,7 +148,7 @@
       .order("done").order("created_at");
     if (error) return showError(error);
     items = data; render();
-    statusEl.textContent = "Updated " + new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    statusEl.textContent = "Updated " + new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) + " · v8";
   }
 
   function photoUrl(path) {
@@ -267,59 +267,68 @@
     if (error && error.code !== "23505") throw error;
   }
 
-  function showBellOn() {
-    bellBtn.hidden = true;
-    bellHint.textContent = "🔔 Notifications are on for this phone.";
-    bellHint.hidden = false;
-  }
+  let bellReg = null, bellOn = false;
+  const READD = "Delete the While Your Out icon from your home screen, open the link in <b>Safari</b>, tap <b>Share → Add to Home Screen</b>, then open it from the new icon.";
 
+  function bell(on, msg) {
+    bellOn = on;
+    bellBtn.hidden = false;
+    bellBtn.disabled = false;
+    bellBtn.textContent = on ? "🔕 Turn off notifications" : "🔔 Turn on notifications";
+    bellHint.innerHTML = msg || (on ? "🔔 Notifications are <b>on</b> for this phone." : "");
+    bellHint.hidden = !bellHint.innerHTML;
+  }
   function noBell(msg) {
     bellBtn.hidden = true;
     bellHint.innerHTML = msg;
     bellHint.hidden = false;
   }
-  const READD = "Delete the While Your Out icon from your home screen, open the link in <b>Safari</b>, tap <b>Share → Add to Home Screen</b>, then open it from the new icon.";
 
   async function setupNotifications() {
     if (!("serviceWorker" in navigator)) return noBell("🔕 This browser can't do notifications. " + (isIOS ? READD : "Try Chrome."));
-    let reg;
-    try { reg = await navigator.serviceWorker.register("sw.js"); }
+    try { bellReg = await navigator.serviceWorker.register("sw.js"); }
     catch (e) { return noBell("🔕 Notifications couldn't start: " + e.message); }
     if (isIOS && !isHomeScreenApp) {
-      bellHint.innerHTML = "🔔 <b>Want notifications?</b> Tap the Share button, then <b>Add to Home Screen</b>, and open the app from the new icon.";
-      bellHint.hidden = false;
-      return;
+      return noBell("🔔 <b>Want notifications?</b> Tap the Share button, then <b>Add to Home Screen</b>, and open the app from the new icon.");
     }
     if (!("PushManager" in window) || !("Notification" in window)) {
       return noBell("🔕 <b>Notifications need a fresh home-screen icon.</b> " + (isIOS ? READD + " (Needs iOS 16.4 or newer.)" : "Try Chrome."));
     }
-    const sub = await reg.pushManager.getSubscription();
-    if (sub && Notification.permission === "granted") {
-      try { await saveSubscription(sub); return showBellOn(); }
-      catch (e) { statusEl.textContent = "Notifications not saved: " + e.message; }
-    }
     if (Notification.permission === "denied") {
-      bellHint.textContent = "Notifications are blocked for this app. Turn them on in your phone's Settings → Notifications.";
-      bellHint.hidden = false;
-      return;
+      return noBell("🔕 Notifications are blocked. Turn them on in your phone's <b>Settings → Notifications → While Your Out</b>.");
     }
-    bellBtn.hidden = false;
+    const sub = await bellReg.pushManager.getSubscription();
+    if (sub && Notification.permission === "granted") {
+      try { await saveSubscription(sub); return bell(true); }
+      catch (e) { return bell(false, "⚠️ Couldn't save this phone: " + e.message + " — tap Turn on to try again."); }
+    }
+    bell(false);
+  }
+
+  async function turnOn() {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") return bell(false, "🔕 Notifications weren't allowed.");
+    const reg = bellReg || await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription()
+             || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(VAPID_PUBLIC) });
+    await saveSubscription(sub);
+    bell(true);
+  }
+
+  async function turnOff() {
+    const reg = bellReg || await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) {
+      await db.rpc("unsubscribe_push", { p_endpoint: sub.endpoint });
+      await sub.unsubscribe();
+    }
+    bell(false, "🔕 Notifications are <b>off</b> for this phone.");
   }
 
   bellBtn.onclick = async () => {
-    try {
-      bellBtn.disabled = true;
-      const perm = await Notification.requestPermission();
-      if (perm !== "granted") { bellBtn.disabled = false; return; }
-      const reg = await navigator.serviceWorker.ready;
-      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(VAPID_PUBLIC) });
-      await saveSubscription(sub);
-      showBellOn();
-      statusEl.textContent = "Notifications are on 🔔";
-    } catch (e) {
-      bellBtn.disabled = false;
-      statusEl.textContent = "Couldn't turn on notifications: " + e.message;
-    }
+    bellBtn.disabled = true;
+    try { bellOn ? await turnOff() : await turnOn(); }
+    catch (e) { bell(bellOn, "⚠️ " + e.message); }
   };
 
   setupNotifications().catch(e => console.warn("notifications", e));
