@@ -273,15 +273,26 @@
     bellHint.hidden = false;
   }
 
+  function noBell(msg) {
+    bellBtn.hidden = true;
+    bellHint.innerHTML = msg;
+    bellHint.hidden = false;
+  }
+  const READD = "Delete the While Your Out icon from your home screen, open the link in <b>Safari</b>, tap <b>Share → Add to Home Screen</b>, then open it from the new icon.";
+
   async function setupNotifications() {
-    if (!("serviceWorker" in navigator)) return;
-    const reg = await navigator.serviceWorker.register("sw.js");
+    if (!("serviceWorker" in navigator)) return noBell("🔕 This browser can't do notifications. " + (isIOS ? READD : "Try Chrome."));
+    let reg;
+    try { reg = await navigator.serviceWorker.register("sw.js"); }
+    catch (e) { return noBell("🔕 Notifications couldn't start: " + e.message); }
     if (isIOS && !isHomeScreenApp) {
       bellHint.innerHTML = "🔔 <b>Want notifications?</b> Tap the Share button, then <b>Add to Home Screen</b>, and open the app from the new icon.";
       bellHint.hidden = false;
       return;
     }
-    if (!("PushManager" in window) || !("Notification" in window)) return;
+    if (!("PushManager" in window) || !("Notification" in window)) {
+      return noBell("🔕 <b>Notifications need a fresh home-screen icon.</b> " + (isIOS ? READD + " (Needs iOS 16.4 or newer.)" : "Try Chrome."));
+    }
     const sub = await reg.pushManager.getSubscription();
     if (sub && Notification.permission === "granted") {
       try { await saveSubscription(sub); return showBellOn(); }
