@@ -6,6 +6,10 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#1f6f4a">
+<meta name="apple-mobile-web-app-title" content="While Your Out">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
 <title>While Your Out</title>
 <style>
   :root {
@@ -52,6 +56,10 @@
   li.done .thumb { opacity: .5; }
   .viewer { position: fixed; inset: 0; background: rgba(0,0,0,.9); display: flex;
             align-items: center; justify-content: center; padding: 16px; z-index: 10; }
+  .bell { display: block; width: 100%; min-height: 52px; margin: -6px 0 18px; background: var(--card);
+          color: var(--accent); border: 1px solid var(--accent); font-weight: 600; }
+  .hint { margin: -6px 0 18px; padding: 12px 14px; border-radius: 12px; background: var(--card);
+          border: 1px dashed var(--line); color: var(--muted); font-size: 15px; }
   .viewer img { max-width: 100%; max-height: 100%; border-radius: 8px; }
 </style>
 </head>
@@ -73,6 +81,8 @@
     <span>Photo ready — add a name (optional) and tap <b>Add</b></span>
     <button id="unphoto" type="button" class="del" title="Remove photo">×</button>
   </div>
+  <button id="bellBtn" class="bell" hidden>🔔 Turn on notifications</button>
+  <div id="bellHint" class="hint" hidden></div>
   <div id="viewer" class="viewer" hidden><img id="viewerImg" alt=""></div>
   <ul id="list"></ul>
   <button id="clear" class="clear" hidden>Remove checked items</button>
@@ -84,6 +94,17 @@
   // Supabase -> Project Settings -> API
   const SUPABASE_URL = "https://uxogthkeatsmzijpizbk.supabase.co";
   const SUPABASE_KEY = "sb_publishable_lnQ9tS7fksLYZuTL5hasLw_2kxH4FqG";
+  // Public half of the push key; the private half lives only in Supabase.
+  const VAPID_PUBLIC = "BH8oOhUi78n19e0QgZpjll6zfHft_LwwfrbqP7frqxamz_gNG2Of7KpGgpsJYeBM371XgHZK6G6O68qVZHoEfV8";
+
+  // Each phone gets its own id so you aren't notified about things you added yourself.
+  const DEVICE_ID = (() => {
+    try {
+      let id = localStorage.getItem("wyo-device");
+      if (!id) { id = Date.now().toString(36) + Math.random().toString(36).slice(2); localStorage.setItem("wyo-device", id); }
+      return id;
+    } catch (e) { return "anon-" + Math.random().toString(36).slice(2); }
+  })();
 
   const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
   const listEl = document.getElementById("list");
@@ -163,7 +184,7 @@
         .upload(photo_path, file, { contentType: file.type || "image/jpeg" });
       if (error) return showError(error), false;
     }
-    const { error } = await db.from("items").insert({ name, photo_path });
+    const { error } = await db.from("items").insert({ name, photo_path, device_id: DEVICE_ID });
     if (error) return showError(error), false;
     load();
     return true;
@@ -226,6 +247,70 @@
     clearPhoto();
     input.focus();
   };
+
+  // ---- Notifications ----
+  const bellBtn = document.getElementById("bellBtn");
+  const bellHint = document.getElementById("bellHint");
+  const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+  const isHomeScreenApp = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+
+  function keyBytes(b64) {
+    const pad = "=".repeat((4 - b64.length % 4) % 4);
+    const raw = atob((b64 + pad).replace(/-/g, "+").replace(/_/g, "/"));
+    return Uint8Array.from(raw, c => c.charCodeAt(0));
+  }
+
+  async function saveSubscription(sub) {
+    const { error } = await db.from("push_subs")
+      .upsert({ endpoint: sub.endpoint, device_id: DEVICE_ID, subscription: sub.toJSON() },
+              { onConflict: "endpoint", ignoreDuplicates: true });
+    if (error) throw error;
+  }
+
+  function showBellOn() {
+    bellBtn.hidden = true;
+    bellHint.hidden = true;
+  }
+
+  async function setupNotifications() {
+    if (!("serviceWorker" in navigator)) return;
+    const reg = await navigator.serviceWorker.register("sw.js");
+    if (isIOS && !isHomeScreenApp) {
+      bellHint.innerHTML = "🔔 <b>Want notifications?</b> Tap the Share button, then <b>Add to Home Screen</b>, and open the app from the new icon.";
+      bellHint.hidden = false;
+      return;
+    }
+    if (!("PushManager" in window) || !("Notification" in window)) return;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub && Notification.permission === "granted") {
+      saveSubscription(sub).catch(() => {});
+      return showBellOn();
+    }
+    if (Notification.permission === "denied") {
+      bellHint.textContent = "Notifications are blocked for this app. Turn them on in your phone's Settings → Notifications.";
+      bellHint.hidden = false;
+      return;
+    }
+    bellBtn.hidden = false;
+  }
+
+  bellBtn.onclick = async () => {
+    try {
+      bellBtn.disabled = true;
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") { bellBtn.disabled = false; return; }
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(VAPID_PUBLIC) });
+      await saveSubscription(sub);
+      showBellOn();
+      statusEl.textContent = "Notifications are on 🔔";
+    } catch (e) {
+      bellBtn.disabled = false;
+      statusEl.textContent = "Couldn't turn on notifications: " + e.message;
+    }
+  };
+
+  setupNotifications().catch(e => console.warn("notifications", e));
 
   // Live: changes on one phone show up on the other right away.
   db.channel("items").on("postgres_changes", { event: "*", schema: "public", table: "items" }, load).subscribe();
