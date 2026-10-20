@@ -261,10 +261,10 @@
   }
 
   async function saveSubscription(sub) {
+    // Plain insert (phones may only add, not read); "already saved" (23505) counts as success.
     const { error } = await db.from("push_subs")
-      .upsert({ endpoint: sub.endpoint, device_id: DEVICE_ID, subscription: sub.toJSON() },
-              { onConflict: "endpoint", ignoreDuplicates: true });
-    if (error) throw error;
+      .insert({ endpoint: sub.endpoint, device_id: DEVICE_ID, subscription: sub.toJSON() });
+    if (error && error.code !== "23505") throw error;
   }
 
   function showBellOn() {
