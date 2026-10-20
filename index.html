@@ -269,7 +269,8 @@
 
   function showBellOn() {
     bellBtn.hidden = true;
-    bellHint.hidden = true;
+    bellHint.textContent = "🔔 Notifications are on for this phone.";
+    bellHint.hidden = false;
   }
 
   async function setupNotifications() {
@@ -283,8 +284,8 @@
     if (!("PushManager" in window) || !("Notification" in window)) return;
     const sub = await reg.pushManager.getSubscription();
     if (sub && Notification.permission === "granted") {
-      saveSubscription(sub).catch(() => {});
-      return showBellOn();
+      try { await saveSubscription(sub); return showBellOn(); }
+      catch (e) { statusEl.textContent = "Notifications not saved: " + e.message; }
     }
     if (Notification.permission === "denied") {
       bellHint.textContent = "Notifications are blocked for this app. Turn them on in your phone's Settings → Notifications.";
